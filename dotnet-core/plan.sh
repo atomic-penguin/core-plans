@@ -1,5 +1,5 @@
-pkg_name=dotnet-core
-pkg_origin=core
+pkg_name=coreclr
+pkg_origin=mwrock
 pkg_version=1.0.4
 pkg_license=('MIT')
 pkg_description=".NET Core is a blazing fast, lightweight and modular platform
@@ -25,6 +25,7 @@ pkg_build_deps=(
   core/libunwind
   core/lttng-ust
   core/util-linux
+  core/userspace-rcu
 )
 pkg_bin_dirs=(bin)
 pkg_include_dirs=(include)
@@ -38,6 +39,9 @@ do_prepare() {
   cp $(pkg_path_for glibc)/lib/crt*  $(pkg_path_for llvm)/lib/clang/3.6.2
 
   pushd $HAB_CACHE_SRC_PATH/coreclr-${pkg_version}/
+
+  [[ -f configure.cmake ]] && sed -e "s/NOT HAVE_LTTNG_TRACEPOINT_H/HAVE_LTTNG_TRACEPOINT_H_IGNORE/g" -i configure.cmake
+
   old_icu='/usr/local/opt/icu4c'
   file_to_change='src/corefx/System.Globalization.Native/CMakeLists.txt'
   [[ -f $file_to_change ]] && sed -e "s%$old_icu%$(pkg_path_for icu)%g" -i $file_to_change
@@ -52,51 +56,49 @@ do_prepare() {
   file_to_change='src/ToolBox/SOS/lldbplugin/CMakeLists.txt'
   [[ -f $file_to_change ]] && sed -e "s/NOT ENABLE_LLDBPLUGIN/ENABLE_LLDBPLUGIN/g" -i $file_to_change
   
-  find_include='include_directories(SYSTEM /usr/local/include)'
-  lttng_include="set(FEATURE_EVENT_TRACE 0)"
   file_to_change='src/pal/src/CMakeLists.txt'
-  [[ -f $file_to_change ]] && sed -e "s%$find_include%$find_include\n$lttng_include%g" -i $file_to_change
-
   find_lib='find_library(UNWIND NAMES unwind'
+  [[ -f $file_to_change ]] && sed -e "s%$find_lib%$find_lib HINTS $(pkg_path_for libunwind)/lib%g" -i $file_to_change
+  find_lib='find_library(UNWIND_ARCH NAMES unwind-x86_64'
+  [[ -f $file_to_change ]] && sed -e "s%$find_lib%$find_lib HINTS $(pkg_path_for libunwind)/lib%g" -i $file_to_change
+  find_lib='find_library(UNWIND_GENERIC NAMES unwind-generic'
   [[ -f $file_to_change ]] && sed -e "s%$find_lib%$find_lib HINTS $(pkg_path_for libunwind)/lib%g" -i $file_to_change
 
   popd
 
   export CFLAGS="$CFLAGS -I$(pkg_path_for gcc)/include/c++/5.2.0 -I$(pkg_path_for gcc)/include/c++/5.2.0/x86_64-unknown-linux-gnu"
   export LDFLAGS="$LDFLAGS -L$(pkg_path_for gcc)/lib/gcc/x86_64-unknown-linux-gnu/5.2.0 -L$(pkg_path_for gcc)/lib64/gcc/x86_64-unknown-linux-gnu/5.2.0"
+  export __IntermediatesDir=$HAB_CACHE_SRC_PATH/coreclr-${pkg_version}
 }
 
 do_build() {
 
-  mkdir -p $HAB_CACHE_SRC_PATH/$pkg_dirname/bin
-  mkdir -p $HAB_CACHE_SRC_PATH/$pkg_dirname/bin/Product/Linux.x64.Release
-  mkdir -p $HAB_CACHE_SRC_PATH/$pkg_dirname/bin/Logs
-  mkdir -p $HAB_CACHE_SRC_PATH/$pkg_dirname/bin/obj/Linux.x64.Release
-  mkdir -p $HAB_CACHE_SRC_PATH/$pkg_dirname/bin/obj/Linux.x64.Release/Generated/eventprovider_new
-  mkdir -p $HAB_CACHE_SRC_PATH/$pkg_dirname/bin/obj/Linux.x64.Release/Generated/eventprovider
+  mkdir -p $HAB_CACHE_SRC_PATH/$pkg_dirname/Generated/eventprovider_new
+  mkdir -p $HAB_CACHE_SRC_PATH/$pkg_dirname/Generated/eventprovider
 
   echo "Laying out dynamically generated files consumed by the build system "
   echo "Laying out dynamically generated Event Logging Test files"
-  $(pkg_path_for python2)/bin/python -B -Wall -Werror "$HAB_CACHE_SRC_PATH/$pkg_dirname/src/scripts/genXplatEventing.py" --man "$HAB_CACHE_SRC_PATH/$pkg_dirname/src/vm/ClrEtwAll.man" --exc "$HAB_CACHE_SRC_PATH/$pkg_dirname/src/vm/ClrEtwAllMeta.lst" --testdir "$HAB_CACHE_SRC_PATH/$pkg_dirname/bin/obj/Linux.x64.Release/Generated/eventprovider_new/tests"
+  $(pkg_path_for python2)/bin/python -B -Wall -Werror "$HAB_CACHE_SRC_PATH/$pkg_dirname/src/scripts/genXplatEventing.py" --man "$HAB_CACHE_SRC_PATH/$pkg_dirname/src/vm/ClrEtwAll.man" --exc "$HAB_CACHE_SRC_PATH/$pkg_dirname/src/vm/ClrEtwAllMeta.lst" --testdir "$HAB_CACHE_SRC_PATH/$pkg_dirname/Generated/eventprovider_new/tests"
 
   echo "Laying out dynamically generated Event Logging Implementation of Lttng"
-  $(pkg_path_for python2)/bin/python -B -Wall -Werror "$HAB_CACHE_SRC_PATH/$pkg_dirname/src/scripts/genXplatLttng.py" --man "$HAB_CACHE_SRC_PATH/$pkg_dirname/src/vm/ClrEtwAll.man" --intermediate "$HAB_CACHE_SRC_PATH/$pkg_dirname/bin/obj/Linux.x64.Release/Generated/eventprovider_new"
+  $(pkg_path_for python2)/bin/python -B -Wall -Werror "$HAB_CACHE_SRC_PATH/$pkg_dirname/src/scripts/genXplatLttng.py" --man "$HAB_CACHE_SRC_PATH/$pkg_dirname/src/vm/ClrEtwAll.man" --intermediate "$HAB_CACHE_SRC_PATH/$pkg_dirname/Generated/eventprovider_new"
 
   echo "Cleaning the temp folder of dynamically generated Event Logging files"
-  $(pkg_path_for python2)/bin/python -B -Wall -Werror -c "import sys;sys.path.insert(0,\"$HAB_CACHE_SRC_PATH/$pkg_dirname/src/scripts\"); from Utilities import *;UpdateDirectory(\"$HAB_CACHE_SRC_PATH/$pkg_dirname/bin/obj/Linux.x64.Release/Generated/eventprovider\",\"$HAB_CACHE_SRC_PATH/$pkg_dirname/bin/obj/Linux.x64.Release/Generated/eventprovider_new\")"
+  $(pkg_path_for python2)/bin/python -B -Wall -Werror -c "import sys;sys.path.insert(0,\"$HAB_CACHE_SRC_PATH/$pkg_dirname/src/scripts\"); from Utilities import *;UpdateDirectory(\"$HAB_CACHE_SRC_PATH/$pkg_dirname/Generated/eventprovider\",\"$HAB_CACHE_SRC_PATH/$pkg_dirname/Generated/eventprovider_new\")"
 
-  rm -rf "$HAB_CACHE_SRC_PATH/$pkg_dirname/bin/obj/Linux.x64.Release/Generated/eventprovider_new"
+  rm -rf "$HAB_CACHE_SRC_PATH/$pkg_dirname/Generated/eventprovider_new"
 
   echo "static char sccsid[] __attribute__((used)) = \"@(#)No version information produced\";" > "$HAB_CACHE_SRC_PATH/$pkg_dirname/version.cpp"
   
   export CC="$(pkg_path_for llvm)/bin/clang"
   export CXX="$(pkg_path_for llvm)/bin/clang++"  
   export LD_RUN_PATH=$LD_RUN_PATH:$(pkg_path_for gcc)/lib:$(pkg_path_for icu)/lib
-  
+  ln -sf $(pkg_path_for glibc)/lib/ld-linux-x86-64.so.2 /lib64/ld-linux-x86-64.so.2
+
   cmake \
     -v -G "Unix Makefiles" \
     "-DCMAKE_INSTALL_PREFIX:PATH=$pkg_prefix" \
-    "-DCMAKE_CXX_FLAGS:PATH=$CFLAGS -isystem $(pkg_path_for glibc)/include -isystem $(pkg_path_for libunwind)/include -Wall -Wno-null-conversion -std=c++11" \
+    "-DCMAKE_CXX_FLAGS:PATH=$CFLAGS -isystem $(pkg_path_for glibc)/include -isystem $(pkg_path_for libunwind)/include -Wno-null-conversion -std=c++11" \
     "-DCMAKE_C_FLAGS:PATH=$CFLAGS -isystem $(pkg_path_for glibc)/include -Wall -std=c11" \
     "-DCMAKE_SHARED_LINKER_FLAGS:PATH=$LDFLAGS" \
     "-DCMAKE_INSTALL_RPATH:STRING=$(pkg_path_for gcc)/lib" \
